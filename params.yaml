@@ -1,0 +1,92 @@
+# Model Parameters
+model:
+  name: "all-MiniLM-L6-v2"
+  embedding_dim: 384
+  similarity_metric: "cosine"
+  confidence_threshold: 0.7
+  
+# Data Processing
+data:
+  raw_data_path: "data/raw/customer_support_tickets.csv"
+  default_categories_path: "data/raw/default_categories.csv"
+  processed_data_path: "data/processed/processed_tickets.csv"
+  ground_truth_path: "data/ground_truth/corrected_labels.csv"
+  drift_baseline_path: "data/drift_baseline/baseline_stats.json"
+  
+  # Text preprocessing
+  preprocessing:
+    lowercase: true
+    remove_special_chars: true
+    remove_extra_spaces: true
+    min_text_length: 10
+    max_text_length: 1000
+  
+  # Train/test split
+  split:
+    test_size: 0.2
+    random_state: 42
+    stratify: true
+
+# Training
+training:
+  batch_size: 32
+  epochs: 10
+  learning_rate: 0.0001
+  early_stopping_patience: 3
+  
+# Evaluation Metrics
+evaluation:
+  metrics:
+    - accuracy
+    - precision
+    - recall
+    - f1_score
+  min_accuracy: 0.85
+  min_f1_score: 0.80
+
+# Drift Detection
+drift:
+  detection_method: "ks_test"  # Kolmogorov-Smirnov test
+  significance_level: 0.05
+  window_size: 100
+  check_frequency_hours: 24
+  
+# Retraining Triggers
+retraining:
+  correction_rate_threshold: 0.15  # Trigger if >15% predictions corrected
+  drift_detected: true
+  performance_degradation_threshold: 0.10  # 10% drop in accuracy
+  min_samples_for_retraining: 50
+  
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  timeout: 300
+  max_upload_size_mb: 10
+  rate_limit_per_minute: 100
+  
+# MLflow
+mlflow:
+  tracking_uri: "http://mlflow:5000"
+  experiment_name: "ticket_classification"
+  artifact_location: "./mlruns"
+  
+# Monitoring
+monitoring:
+  prometheus_port: 9090
+  grafana_port: 3001
+  metrics_update_interval_seconds: 60
+  alert_error_rate_threshold: 0.05
+  alert_latency_threshold_ms: 500
+  
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/app.log"
+  max_bytes: 10485760  # 10MB
+  backup_count: 5
+
+# Made with Bob
