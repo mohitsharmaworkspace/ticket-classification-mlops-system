@@ -5,6 +5,8 @@ API Routes for Ticket Classification
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import Response
 import time
+import pandas as pd
+import io
 
 from app.api.schemas import (
     SingleTextRequest,
@@ -20,6 +22,7 @@ from app.api.schemas import (
 from app.services.prediction_service import prediction_service
 from app.services.feedback_service import feedback_service
 from app.services.validation_service import validation_service
+from app.services.training_service import training_service
 from app.models.classifier import classifier
 from app.utils.logger import logger
 from app.utils.metrics import metrics_collector
@@ -290,5 +293,120 @@ async def get_metrics_summary():
     except Exception as e:
         logger.error(f"Metrics summary error: {e}")
         raise HTTPException(status_code=500, detail="Error generating metrics summary")
+
+
+@router.post("/train",
+            summary="Train model with data",
+            description="Train the model using uploaded ticket data with default categories")
+async def train_model(file: UploadFile = File(..., description="CSV file with tickets and labels")):
+    """
+    Train model with uploaded data
+    
+    - **file**: CSV with 'Ticket Description' and 'Ticket Type' columns
+    
+    Trains model using default categories
+    """
+    start_time = time.time()
+    
+    try:
+        # Validate file
+        validation_result = await validation_service.validate_csv_file(
+            file,
+            required_columns=['Ticket Description', 'Ticket Type']
+        )
+        
+        if not validation_result['valid']:
+            raise HTTPException(status_code=400, detail=validation_result['errors'])
+        
+        # Read CSV
+        contents = await file.read()
+        df = pd.read_csv(io.BytesIO(contents))
+        
+        # Train model
+        logger.info(f"Starting training with {len(df)} tickets")
+        result = training_service.train_with_default_categories(df)
+        
+        # Reload classifier with new trained model
+        classifier.load_category_embeddings()
+        classifier.set_prediction_mode(use_trained_model=True)
+        
+        duration = time.time() - start_time
+        metrics_collector.record_request("POST", "/train", 200, duration)
+        
+        return {
+            'status': 'success',
+            'message': 'Model trained successfully',
+            'training_time': result['training_time'],
+            'num_tickets': result['num_tickets'],
+            'num_categories': result['num_categories'],
+            'metrics': result.get('metrics', {})
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Training error: {e}")
+        metrics_collector.record_error("training_error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/retrain",
+            summary="Retrain model with feedback",
+            description="Retrain model incorporating user feedback corrections")
+async def retrain_model():
+    """
+    Retrain model with feedback
+    
+    Incorporates user corrections from feedback into training
+    """
+    start_time = time.time()
+    
+    try:
+        # Retrain with feedback
+        result = training_service.retrain_with_feedback()
+        
+        if result['status'] == 'skipped':
+            return {
+                'status': 'skipped',
+                'message': result['message']
+            }
+        
+        # Reload classifier with new trained model
+        classifier.load_category_embeddings()
+        classifier.set_prediction_mode(use_trained_model=True)
+        
+        duration = time.time() - start_time
+        metrics_collector.record_request("POST", "/retrain", 200, duration)
+        
+        return {
+            'status': 'success',
+            'message': 'Model retrained successfully with feedback',
+            'training_time': result['training_time'],
+            'num_tickets': result['num_tickets'],
+            'feedback_count': result.get('feedback_count', 0),
+            'metrics': result.get('metrics', {})
+        }
+        
+    except Exception as e:
+        logger.error(f"Retraining error: {e}")
+        metrics_collector.record_error("retraining_error")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/training-status",
+           summary="Get training status",
+           description="Check if model is trained and get training info")
+async def get_training_status():
+    """
+    Get training status
+    
+    Returns information about current trained model
+    """
+    try:
+        status = training_service.get_training_status()
+        return status
+    except Exception as e:
+        logger.error(f"Training status error: {e}")
+        raise HTTPException(status_code=500, detail="Error getting training status")
 
 # Made with Bob

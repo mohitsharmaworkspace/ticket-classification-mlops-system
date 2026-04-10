@@ -1,217 +1,135 @@
-"""
-Model training and evaluation for ticket classification
-"""
-
 import pandas as pd
 import numpy as np
 import logging
 from typing import Dict, Any, Optional
 from pathlib import Path
 import mlflow
-import mlflow.sklearn
 from datetime import datetime
+from sentence_transformers import SentenceTransformer
 
 from ml_pipeline.config import config
 from ml_pipeline.data_preprocessing import DataPreprocessor
-from ml_pipeline.feature_engineering import FeatureEngineer
+from ml_pipeline.models.mlp_classifier import MLPClassifier
+from ml_pipeline.models.trainer import ModelTrainer
 
 logger = logging.getLogger(__name__)
 
 
-class ModelTrainer:
-    """Model training and MLflow integration"""
-    
+class MLPModelTrainer:
     def __init__(self, experiment_name: Optional[str] = None):
-        """
-        Initialize model trainer
-        
-        Args:
-            experiment_name: MLflow experiment name
-        """
-        self.experiment_name = experiment_name or config.get('mlflow.experiment_name', 'ticket_classification')
-        self.mlflow_uri = config.get('mlflow.tracking_uri', 'http://mlflow:5000')
+        self.experiment_name = experiment_name or config.mlflow_experiment_name
+        self.mlflow_uri = config.mlflow_tracking_uri
         self.preprocessor = DataPreprocessor()
-        self.feature_engineer = FeatureEngineer()
+        self.embedding_model = None
         
     def setup_mlflow(self):
-        """Setup MLflow tracking"""
         try:
             mlflow.set_tracking_uri(self.mlflow_uri)
             mlflow.set_experiment(self.experiment_name)
             logger.info(f"MLflow tracking URI: {self.mlflow_uri}")
-            logger.info(f"MLflow experiment: {self.experiment_name}")
         except Exception as e:
             logger.warning(f"Could not connect to MLflow server: {e}")
-            logger.info("Using local MLflow tracking")
             mlflow.set_tracking_uri("file:./mlruns")
             mlflow.set_experiment(self.experiment_name)
-            
-    def train_model(self, tickets_df: pd.DataFrame, 
-                   categories_df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Train the classification model
+    
+    def load_embedding_model(self):
+        if self.embedding_model is None:
+            model_name = config.model_name
+            logger.info(f"Loading embedding model: {model_name}")
+            self.embedding_model = SentenceTransformer(model_name)
+        return self.embedding_model
+    
+    def generate_embeddings(self, texts):
+        model = self.load_embedding_model()
+        logger.info(f"Generating embeddings for {len(texts)} texts")
+        embeddings = model.encode(texts, show_progress_bar=True, convert_to_numpy=True)
+        return embeddings
+    
+    def train_model(self, tickets_df: pd.DataFrame) -> Dict[str, Any]:
+        logger.info("Starting MLP model training")
         
-        Args:
-            tickets_df: DataFrame with ticket data
-            categories_df: DataFrame with category definitions
-            
-        Returns:
-            Dictionary with training results
-        """
-        logger.info("Starting model training")
-        
-        # Setup MLflow
         self.setup_mlflow()
         
-        with mlflow.start_run(run_name=f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
-            # Log parameters
-            mlflow.log_param("model_name", self.feature_engineer.model_name)
-            mlflow.log_param("num_categories", len(categories_df))
-            mlflow.log_param("num_tickets", len(tickets_df))
-            
-            # Generate category embeddings
-            self.feature_engineer.generate_category_embeddings(categories_df)
-            self.feature_engineer.save_category_embeddings()
-            
-            # Process tickets
-            df = self.feature_engineer.process_tickets(tickets_df)
-            
-            # Calculate metrics
-            metrics = self.calculate_metrics(df)
-            
-            # Log metrics
-            for metric_name, metric_value in metrics.items():
-                mlflow.log_metric(metric_name, metric_value)
-                
-            # Log artifacts
-            mlflow.log_artifact("models/embeddings/category_embeddings.pkl")
-            mlflow.log_artifact(config.drift_baseline_path)
-            
-            # Log model info
-            model_info = {
-                'model_name': self.feature_engineer.model_name,
-                'num_categories': len(categories_df),
-                'category_names': self.feature_engineer.category_names,
-                'training_date': datetime.now().isoformat(),
-                'metrics': metrics
-            }
-            
-            mlflow.log_dict(model_info, "model_info.json")
-            
-            logger.info("Model training completed")
-            logger.info(f"Metrics: {metrics}")
-            
-            return {
-                'metrics': metrics,
-                'model_info': model_info,
-                'predictions_df': df
-            }
-            
-    def calculate_metrics(self, df: pd.DataFrame) -> Dict[str, float]:
-        """
-        Calculate evaluation metrics
+        text_column = 'combined_text' if 'combined_text' in tickets_df.columns else 'Ticket Description'
+        label_column = 'Ticket Type'
         
-        Args:
-            df: DataFrame with predictions
+        texts = tickets_df[text_column].tolist()
+        labels = tickets_df[label_column].tolist()
+        
+        embeddings = self.generate_embeddings(texts)
+        
+        num_classes = len(set(labels))
+        mlp_config = {
+            'hidden_dims': config.get('training.mlp.hidden_layers', [256, 128]),
+            'dropout_rates': config.get('training.mlp.dropout_rate', [0.3, 0.2]),
+            'learning_rate': config.get('training.learning_rate', 0.001),
+            'batch_size': config.get('training.batch_size', 32),
+            'early_stopping_patience': config.get('training.early_stopping_patience', 5)
+        }
+        
+        model = MLPClassifier(
+            input_dim=embeddings.shape[1],
+            hidden_dims=mlp_config['hidden_dims'],
+            num_classes=num_classes,
+            dropout_rates=mlp_config['dropout_rates']
+        )
+        
+        trainer = ModelTrainer(model, mlp_config)
+        
+        epochs = config.get('training.epochs', 50)
+        val_split = config.get('data.split.test_size', 0.2)
+        
+        training_results = trainer.train(embeddings, labels, epochs=epochs, val_split=val_split)
+        
+        try:
+            mlflow.log_param("model_type", "MLP")
+            mlflow.log_param("num_classes", num_classes)
+            mlflow.log_param("num_samples", len(texts))
+            mlflow.log_param("embedding_dim", embeddings.shape[1])
+            mlflow.log_params(mlp_config)
             
-        Returns:
-            Dictionary of metrics
-        """
-        from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+            mlflow.log_metric("final_train_acc", training_results['train_accs'][-1])
+            mlflow.log_metric("final_val_acc", training_results['final_val_acc'])
+            mlflow.log_metric("best_val_loss", training_results['best_val_loss'])
+            mlflow.log_metric("training_time", training_results['training_time'])
+        except:
+            logger.warning("MLflow logging failed")
         
-        metrics = {}
+        trainer.save_model()
         
-        # If we have ground truth labels
-        if 'Ticket Type' in df.columns:
-            y_true = df['Ticket Type'].values
-            y_pred = df['predicted_category'].values
-            
-            # Calculate accuracy
-            accuracy = accuracy_score(y_true, y_pred)
-            metrics['accuracy'] = float(accuracy)
-            
-            # Calculate precision, recall, f1
-            precision, recall, f1, _ = precision_recall_fscore_support(
-                y_true, y_pred, average='weighted', zero_division=0
-            )
-            
-            metrics['precision'] = float(precision)
-            metrics['recall'] = float(recall)
-            metrics['f1_score'] = float(f1)
-            
-        # Confidence statistics
-        metrics['mean_confidence'] = float(df['confidence_score'].mean())
-        metrics['std_confidence'] = float(df['confidence_score'].std())
-        metrics['min_confidence'] = float(df['confidence_score'].min())
-        metrics['max_confidence'] = float(df['confidence_score'].max())
+        logger.info("Model training completed")
         
-        # Low confidence predictions
-        threshold = config.confidence_threshold
-        low_confidence_count = len(df[df['confidence_score'] < threshold])
-        metrics['low_confidence_ratio'] = float(low_confidence_count / len(df))
-        
-        return metrics
-        
-    def evaluate_model(self, test_df: pd.DataFrame) -> Dict[str, float]:
-        """
-        Evaluate model on test data
-        
-        Args:
-            test_df: Test DataFrame
-            
-        Returns:
-            Dictionary of evaluation metrics
-        """
-        logger.info("Evaluating model")
-        
-        # Load category embeddings
-        self.feature_engineer.load_category_embeddings()
-        
-        # Process test data
-        df = self.feature_engineer.process_tickets(test_df)
-        
-        # Calculate metrics
-        metrics = self.calculate_metrics(df)
-        
-        logger.info(f"Evaluation metrics: {metrics}")
-        return metrics
-        
-    def run_training_pipeline(self, 
-                             input_data_path: Optional[str] = None,
-                             categories_path: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Run complete training pipeline
-        
-        Args:
-            input_data_path: Path to input data (optional)
-            categories_path: Path to categories (optional)
-            
-        Returns:
-            Training results
-        """
+        return {
+            'metrics': {
+                'train_accuracy': training_results['train_accs'][-1],
+                'val_accuracy': training_results['final_val_acc'],
+                'best_val_loss': training_results['best_val_loss']
+            },
+            'model_info': {
+                'model_type': 'MLP',
+                'num_classes': num_classes,
+                'training_time': training_results['training_time']
+            },
+            'training_history': training_results
+        }
+    
+    def run_training_pipeline(self, input_data_path: Optional[str] = None) -> Dict[str, Any]:
         logger.info("Starting training pipeline")
         
-        # Load and preprocess data
         tickets_df = self.preprocessor.load_raw_data(input_data_path)
         tickets_df = self.preprocessor.preprocess(tickets_df)
         
-        # Load categories
-        categories_df = self.preprocessor.load_categories(categories_path)
+        results = self.train_model(tickets_df)
         
-        # Train model
-        results = self.train_model(tickets_df, categories_df)
-        
-        # Save processed data with predictions
         output_path = config.processed_data_path
-        results['predictions_df'].to_csv(output_path, index=False)
-        logger.info(f"Predictions saved to {output_path}")
+        tickets_df.to_csv(str(output_path), index=False)
+        logger.info(f"Processed data saved to {str(output_path)}")
         
         return results
 
 
 if __name__ == "__main__":
-    # Run training pipeline
-    trainer = ModelTrainer()
+    trainer = MLPModelTrainer()
     results = trainer.run_training_pipeline()
     
     print("\n=== Training Results ===")

@@ -1,6 +1,5 @@
 """
 Main FastAPI Application
-Ticket Classification MLOps System
 """
 
 from fastapi import FastAPI, Request
@@ -18,38 +17,32 @@ from app.utils.metrics import metrics_collector, model_load_time, categories_loa
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Lifespan context manager for startup and shutdown events
-    """
-    # Startup
     logger.info("=" * 50)
     logger.info("Starting Ticket Classification API")
     logger.info("=" * 50)
     
     try:
-        # Load model
-        logger.info("Loading sentence transformer model...")
-        load_time = classifier.load_model()
+        logger.info("Loading embedding model...")
+        load_time = classifier.load_embedding_model()
         model_load_time.set(load_time)
         
-        # Load category embeddings
-        logger.info("Loading category embeddings...")
-        classifier.load_category_embeddings()
+        logger.info("Loading trained MLP classifier...")
+        classifier.load_trained_model()
         categories_loaded.set(len(classifier.category_names))
         
-        logger.info(f"✓ Model loaded: {classifier.model_name}")
-        logger.info(f"✓ Categories loaded: {len(classifier.category_names)}")
+        logger.info(f"✓ Embedding model: {classifier.model_name}")
+        logger.info(f"✓ Categories: {len(classifier.category_names)}")
+        logger.info(f"✓ Mode: {classifier.get_model_info()['prediction_mode']}")
         logger.info(f"✓ API ready on {settings.HOST}:{settings.PORT}")
         logger.info("=" * 50)
         
     except Exception as e:
-        logger.error(f"Failed to initialize application: {e}")
+        logger.error(f"Failed to initialize: {e}")
         raise
     
     yield
     
-    # Shutdown
-    logger.info("Shutting down Ticket Classification API")
+    logger.info("Shutting down API")
 
 
 # Create FastAPI app
@@ -72,35 +65,23 @@ app.add_middleware(
 )
 
 
-# Middleware for request logging and metrics
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log all requests and track metrics"""
     start_time = time.time()
-    
-    # Log request
     logger.info(f"→ {request.method} {request.url.path}")
     
     try:
         response = await call_next(request)
-        
-        # Calculate duration
         duration = time.time() - start_time
-        
-        # Log response
         logger.info(f"← {request.method} {request.url.path} - {response.status_code} ({duration:.3f}s)")
-        
         return response
-        
     except Exception as e:
         logger.error(f"Request failed: {e}")
         raise
 
 
-# Exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Global exception handler"""
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     metrics_collector.record_error("unhandled_exception")
     
@@ -114,14 +95,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Include API routes
 app.include_router(router, prefix="/api/v1", tags=["Ticket Classification"])
 
 
-# Root endpoint
 @app.get("/", tags=["Root"])
 async def root():
-    """Root endpoint with API information"""
     return {
         "name": settings.API_TITLE,
         "version": settings.API_VERSION,
@@ -132,10 +110,8 @@ async def root():
     }
 
 
-# Additional health check at root level
 @app.get("/health", tags=["Health"])
 async def health():
-    """Simple health check"""
     return {"status": "healthy"}
 
 
@@ -150,5 +126,3 @@ if __name__ == "__main__":
         workers=settings.WORKERS if not settings.RELOAD else 1,
         log_level=settings.LOG_LEVEL.lower()
     )
-
-# Made with Bob

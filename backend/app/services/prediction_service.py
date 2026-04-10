@@ -14,11 +14,10 @@ from app.utils.preprocessing import clean_text, validate_text_length
 
 
 class PredictionService:
-    """Handle prediction operations"""
     
     def __init__(self):
-        """Initialize prediction service"""
         self.classifier = classifier
+        self.classifier.set_prediction_mode(use_trained_model=True)
         
     async def predict_single_text(self, text: str) -> Dict:
         """
@@ -118,11 +117,11 @@ class PredictionService:
             logger.error(f"Error in bulk prediction: {e}")
             raise
             
-    async def predict_with_custom_categories(self, 
+    async def predict_with_custom_categories(self,
                                             tickets_file: UploadFile,
                                             categories_file: UploadFile) -> Dict:
         """
-        Predict with custom category definitions
+        Predict with custom category definitions (similarity-based)
         
         Args:
             tickets_file: CSV file with tickets
@@ -134,6 +133,9 @@ class PredictionService:
         start_time = time.time()
         
         try:
+            # Switch to similarity mode for custom categories
+            self.classifier.set_prediction_mode(use_trained_model=False)
+            
             # Read categories CSV
             cat_contents = await categories_file.read()
             categories_df = pd.read_csv(io.BytesIO(cat_contents))
@@ -143,8 +145,8 @@ class PredictionService:
             if not all(col in categories_df.columns for col in required_cols):
                 raise ValueError(f"Categories CSV must contain: {required_cols}")
                 
-            # Generate embeddings for custom categories
-            logger.info(f"Generating embeddings for {len(categories_df)} custom categories")
+            # Generate embeddings for custom categories (similarity mode)
+            logger.info(f"Generating embeddings for {len(categories_df)} custom categories (similarity mode)")
             self.classifier.generate_category_embeddings(categories_df)
             
             # Read tickets CSV
@@ -191,18 +193,18 @@ class PredictionService:
                 'low_confidence_count': low_confidence_count
             }
             
-            logger.info(f"Advanced mode prediction: {len(results)} tickets with {len(categories_df)} custom categories")
+            logger.info(f"Advanced mode prediction: {len(results)} tickets with {len(categories_df)} custom categories (similarity mode)")
             
-            # Reload default categories for next requests
-            self.classifier._load_default_categories()
+            self.classifier.load_trained_model()
+            self.classifier.set_prediction_mode(use_trained_model=True)
             
             return result
             
         except Exception as e:
             logger.error(f"Error in advanced mode prediction: {e}")
-            # Reload default categories on error
             try:
-                self.classifier._load_default_categories()
+                self.classifier.load_trained_model()
+                self.classifier.set_prediction_mode(use_trained_model=True)
             except:
                 pass
             raise
