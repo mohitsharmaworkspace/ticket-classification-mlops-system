@@ -1,0 +1,5 @@
+[core]
+    remote = myremote
+['remote "myremote"']
+    url = s3://ticket-classification-bucket-v2/dvc-storage
+    region = ap-south-1
