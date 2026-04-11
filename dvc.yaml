@@ -1,0 +1,100 @@
+# DVC Pipeline Configuration
+# This file defines the ML pipeline stages and their dependencies
+
+stages:
+  data_preprocessing:
+    cmd: python ml_pipeline/data_preprocessing.py
+    deps:
+      - data/raw/customer_support_tickets.csv
+      - data/raw/default_categories.csv
+      - ml_pipeline/data_preprocessing.py
+    params:
+      - preprocessing.max_length
+      - preprocessing.min_samples_per_category
+      - preprocessing.test_size
+      - preprocessing.val_size
+      - preprocessing.random_state
+    outs:
+      - data/processed/train.csv
+      - data/processed/val.csv
+      - data/processed/test.csv
+    metrics:
+      - data/processed/preprocessing_metrics.json:
+          cache: false
+
+  feature_engineering:
+    cmd: python ml_pipeline/feature_engineering.py
+    deps:
+      - data/processed/train.csv
+      - data/processed/val.csv
+      - data/processed/test.csv
+      - ml_pipeline/feature_engineering.py
+    params:
+      - feature_engineering.embedding_model
+      - feature_engineering.batch_size
+    outs:
+      - models/embeddings/train_embeddings.npy
+      - models/embeddings/val_embeddings.npy
+      - models/embeddings/test_embeddings.npy
+
+  model_training:
+    cmd: python ml_pipeline/model_training.py
+    deps:
+      - models/embeddings/train_embeddings.npy
+      - models/embeddings/val_embeddings.npy
+      - data/processed/train.csv
+      - data/processed/val.csv
+      - ml_pipeline/model_training.py
+      - ml_pipeline/models/mlp_classifier.py
+      - ml_pipeline/models/trainer.py
+    params:
+      - training.epochs
+      - training.batch_size
+      - training.learning_rate
+      - training.hidden_dim
+      - training.dropout
+      - training.early_stopping_patience
+      - training.weight_decay
+    outs:
+      - models/trained/mlp_classifier.pth
+      - models/trained/label_encoder.pkl
+    metrics:
+      - models/trained/training_metrics.json:
+          cache: false
+
+  model_evaluation:
+    cmd: python ml_pipeline/model_evaluation.py
+    deps:
+      - models/trained/mlp_classifier.pth
+      - models/trained/label_encoder.pkl
+      - models/embeddings/test_embeddings.npy
+      - data/processed/test.csv
+      - ml_pipeline/model_evaluation.py
+    params:
+      - evaluation.threshold
+      - evaluation.top_k
+    metrics:
+      - models/trained/evaluation_metrics.json:
+          cache: false
+    plots:
+      - models/trained/confusion_matrix.json:
+          template: confusion
+          x: actual
+          y: predicted
+
+  drift_detection:
+    cmd: python ml_pipeline/drift_detection.py
+    deps:
+      - models/embeddings/train_embeddings.npy
+      - data/processed/train.csv
+      - ml_pipeline/drift_detection.py
+    params:
+      - drift_detection.threshold
+      - drift_detection.window_size
+    outs:
+      - data/drift_baseline/baseline_stats.pkl
+    metrics:
+      - data/drift_baseline/drift_metrics.json:
+          cache: false
+
+# Made with Bob

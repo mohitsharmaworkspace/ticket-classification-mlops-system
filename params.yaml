@@ -4,38 +4,34 @@ model:
   embedding_dim: 384
   similarity_metric: "cosine"
   confidence_threshold: 0.7
-  
-# Data Processing
-data:
-  raw_data_path: "data/raw/customer_support_tickets.csv"
-  default_categories_path: "data/raw/default_categories.csv"
-  processed_data_path: "data/processed/processed_tickets.csv"
-  ground_truth_path: "data/ground_truth/corrected_labels.csv"
-  drift_baseline_path: "data/drift_baseline/baseline_stats.json"
-  
-  # Text preprocessing
-  preprocessing:
-    lowercase: true
-    remove_special_chars: true
-    remove_extra_spaces: true
-    min_text_length: 10
-    max_text_length: 1000
-  
-  # Train/test split
-  split:
-    test_size: 0.2
-    random_state: 42
-    stratify: true
 
-# Training
-training:
+# Data Preprocessing Parameters
+preprocessing:
+  max_length: 512
+  min_samples_per_category: 10
+  test_size: 0.2
+  val_size: 0.1
+  random_state: 42
+
+# Feature Engineering Parameters
+feature_engineering:
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
   batch_size: 32
-  epochs: 10
-  learning_rate: 0.0001
-  early_stopping_patience: 3
+
+# Training Parameters
+training:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.001
+  hidden_dim: 256
+  dropout: 0.3
+  early_stopping_patience: 5
+  weight_decay: 0.0001
   
-# Evaluation Metrics
+# Evaluation Parameters
 evaluation:
+  threshold: 0.5
+  top_k: 3
   metrics:
     - accuracy
     - precision
@@ -44,11 +40,11 @@ evaluation:
   min_accuracy: 0.85
   min_f1_score: 0.80
 
-# Drift Detection
-drift:
-  detection_method: "ks_test"  # Kolmogorov-Smirnov test
-  significance_level: 0.05
+# Drift Detection Parameters
+drift_detection:
+  threshold: 0.05
   window_size: 100
+  detection_method: "ks_test"  # Kolmogorov-Smirnov test
   check_frequency_hours: 24
   
 # Retraining Triggers
