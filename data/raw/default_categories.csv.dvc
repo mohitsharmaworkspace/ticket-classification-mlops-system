@@ -1,0 +1,5 @@
+outs:
+- md5: c10a5a43018345d7ccf55293db8ad2ed
+  size: 1537
+  hash: md5
+  path: default_categories.csv
